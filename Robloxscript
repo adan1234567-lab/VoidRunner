@@ -1,0 +1,214 @@
+loader.luau
+-- SERVICES
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local player = game.Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+
+-- REMOTES
+local saveEvent = ReplicatedStorage:WaitForChild("SaveSettings")
+local loadFunc = ReplicatedStorage:WaitForChild("LoadSettings")
+
+-- CHARACTER
+local function getChar()
+	local c = player.Character or player.CharacterAdded:Wait()
+	return c, c:WaitForChild("Humanoid"), c:WaitForChild("HumanoidRootPart")
+end
+
+local char, humanoid, root = getChar()
+player.CharacterAdded:Connect(function()
+	char, humanoid, root = getChar()
+end)
+
+--------------------------------------------------
+-- LOAD SETTINGS
+--------------------------------------------------
+local settings = loadFunc:InvokeServer() or {}
+
+settings.WalkSpeed = settings.WalkSpeed or 16
+settings.FlySpeed = settings.FlySpeed or 50
+settings.Fly = settings.Fly or false
+settings.Noclip = settings.Noclip or false
+settings.RedWorld = settings.RedWorld or false
+
+--------------------------------------------------
+-- UI BASE
+--------------------------------------------------
+local gui = Instance.new("ScreenGui", player.PlayerGui)
+
+local main = Instance.new("Frame", gui)
+main.Size = UDim2.new(0, 600, 0, 350)
+main.Position = UDim2.new(0.5, -300, 0.5, -175)
+main.BackgroundColor3 = Color3.fromRGB(20,20,20)
+Instance.new("UICorner", main)
+
+-- Toggle UI
+UIS.InputBegan:Connect(function(input, gp)
+	if not gp and input.KeyCode == Enum.KeyCode.RightShift then
+		main.Visible = not main.Visible
+	end
+end)
+
+--------------------------------------------------
+-- SIDEBAR
+--------------------------------------------------
+local sidebar = Instance.new("Frame", main)
+sidebar.Size = UDim2.new(0, 150, 1, 0)
+sidebar.BackgroundColor3 = Color3.fromRGB(25,25,25)
+
+local pages = {}
+
+local function createPage(name, icon, y)
+	local btn = Instance.new("TextButton", sidebar)
+	btn.Size = UDim2.new(1, 0, 0, 40)
+	btn.Position = UDim2.new(0, 0, 0, y)
+	btn.Text = icon.." "..name
+	btn.BackgroundColor3 = Color3.fromRGB(35,35,35)
+
+	local page = Instance.new("Frame", main)
+	page.Size = UDim2.new(1, -150, 1, 0)
+	page.Position = UDim2.new(0,150,0,0)
+	page.Visible = false
+	page.BackgroundTransparency = 1
+
+	btn.MouseButton1Click:Connect(function()
+		for _,p in pairs(pages) do p.Visible = false end
+		page.Visible = true
+	end)
+
+	pages[name] = page
+	return page
+end
+
+local movement = createPage("Movement","🏃",0)
+local playerPage = createPage("Player","🧍",40)
+local settingsPage = createPage("Settings","⚙️",80)
+
+movement.Visible = true
+
+--------------------------------------------------
+-- UI ELEMENTS
+--------------------------------------------------
+local function createToggle(parent, text, y, state, callback)
+	local btn = Instance.new("TextButton", parent)
+	btn.Size = UDim2.new(0,240,0,30)
+	btn.Position = UDim2.new(0,20,0,y)
+	btn.Text = text
+	btn.BackgroundColor3 = state and Color3.fromRGB(140,0,255) or Color3.fromRGB(45,45,45)
+	Instance.new("UICorner", btn)
+
+	btn.MouseButton1Click:Connect(function()
+		state = not state
+		btn.BackgroundColor3 = state and Color3.fromRGB(140,0,255) or Color3.fromRGB(45,45,45)
+		callback(state)
+		saveEvent:FireServer(settings)
+	end)
+end
+
+local function createSlider(parent, text, y, min, max, value, callback)
+	local frame = Instance.new("Frame", parent)
+	frame.Size = UDim2.new(0,260,0,50)
+	frame.Position = UDim2.new(0,20,0,y)
+
+	local label = Instance.new("TextLabel", frame)
+	label.Size = UDim2.new(1,0,0,20)
+	label.Text = text..": "..value
+	label.BackgroundTransparency = 1
+
+	local bar = Instance.new("Frame", frame)
+	bar.Size = UDim2.new(1,0,0,10)
+	bar.Position = UDim2.new(0,0,0,30)
+	bar.BackgroundColor3 = Color3.fromRGB(60,60,60)
+
+	local fill = Instance.new("Frame", bar)
+	fill.Size = UDim2.new((value-min)/(max-min),0,1,0)
+	fill.BackgroundColor3 = Color3.fromRGB(140,0,255)
+
+	local dragging = false
+
+	bar.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end
+	end)
+
+	UIS.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+	end)
+
+	UIS.InputChanged:Connect(function(i)
+		if dragging then
+			local pos = math.clamp((i.Position.X - bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1)
+			fill.Size = UDim2.new(pos,0,1,0)
+			value = math.floor(min+(max-min)*pos)
+			label.Text = text..": "..value
+			callback(value)
+			saveEvent:FireServer(settings)
+		end
+	end)
+end
+
+--------------------------------------------------
+-- FEATURES
+--------------------------------------------------
+
+-- WalkSpeed
+createSlider(movement,"WalkSpeed",20,10,100,settings.WalkSpeed,function(v)
+	settings.WalkSpeed = v
+	humanoid.WalkSpeed = v
+end)
+
+-- Fly
+local flyConn
+createToggle(movement,"Fly",90,settings.Fly,function(on)
+	settings.Fly = on
+
+	if on then
+		flyConn = RunService.RenderStepped:Connect(function()
+			local cam = workspace.CurrentCamera
+			local move = Vector3.zero
+
+			if UIS:IsKeyDown(Enum.KeyCode.W) then move += cam.CFrame.LookVector end
+			if UIS:IsKeyDown(Enum.KeyCode.S) then move -= cam.CFrame.LookVector end
+			if UIS:IsKeyDown(Enum.KeyCode.A) then move -= cam.CFrame.RightVector end
+			if UIS:IsKeyDown(Enum.KeyCode.D) then move += cam.CFrame.RightVector end
+			if UIS:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0,1,0) end
+			if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0,1,0) end
+
+			root.Velocity = move.Magnitude > 0 and move.Unit * settings.FlySpeed or Vector3.zero
+		end)
+	else
+		if flyConn then flyConn:Disconnect() end
+	end
+end)
+
+-- FlySpeed
+createSlider(movement,"FlySpeed",140,10,200,settings.FlySpeed,function(v)
+	settings.FlySpeed = v
+end)
+
+-- Noclip
+local noclipConn
+createToggle(playerPage,"Noclip",20,settings.Noclip,function(on)
+	settings.Noclip = on
+	if on then
+		noclipConn = RunService.Stepped:Connect(function()
+			for _,v in pairs(char:GetDescendants()) do
+				if v:IsA("BasePart") then v.CanCollide = false end
+			end
+		end)
+	else
+		if noclipConn then noclipConn:Disconnect() end
+	end
+end)
+
+-- Red World
+local redEffect
+createToggle(settingsPage,"Red World",20,settings.RedWorld,function(on)
+	settings.RedWorld = on
+	if on then
+		redEffect = Instance.new("ColorCorrectionEffect", Lighting)
+		redEffect.TintColor = Color3.fromRGB(255,80,80)
+	else
+		if redEffect then redEffect:Destroy() end
+	end
+end)
